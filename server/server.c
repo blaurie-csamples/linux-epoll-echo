@@ -5,12 +5,14 @@
 
 #include <sys/epoll.h>
 #include <fcntl.h>
+#include <string.h>
 
 #define PORT "8080"
 #define BACKLOG 10
 #define MAX_EVENTS 10
 
 int get_listen_socket();
+int do_work_fd(int fd);
 
 int setnonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
@@ -109,8 +111,70 @@ int main() {
                 // a new event should you be unable to read them all at once.
 
                 //do_use_fd(events[n].data.fd);
+                do_work_fd(events[n].data.fd);
+                close(events[n].data.fd);
             }
 
+        }
+    }
+
+    close(listen_fd);
+    close(epoll_fd);
+
+    return 0;
+}
+
+int do_work_fd(int fd) {
+    size_t max_len = 4096;
+    char request_buf[max_len];
+    char *request_cursor = &(request_buf[0]);
+    memset(request_cursor, 0, max_len);
+    size_t message_len = 0;
+
+    while (1) {
+        ssize_t num_bytes_read = recv(fd, request_cursor, max_len - message_len, 0);
+
+        if (num_bytes_read > 0) {
+            printf("Read bytes: %zd: %s\n", num_bytes_read, request_buf);
+            message_len += num_bytes_read;
+            if (request_buf[message_len - 1] == '\n') {
+                break;
+            } else {
+                request_cursor += message_len;
+                continue;
+            }
+        } else if (num_bytes_read == 0) {
+            printf("No more to read\n");
+            break;
+        } else {
+            printf("Error reading from socket. Check errno\n");
+            break;
+            //in many cases, we are fine with continuing on after EAGAIN or EWOULDBLOCK
+        }
+    }
+
+    //and now write the message back out:
+    request_cursor = &(request_buf[0]);
+    size_t still_to_write = message_len;
+    while (1) {
+        ssize_t num_bytes_sent = send(fd, request_cursor, still_to_write, 0);
+
+        if (num_bytes_sent > 0) {
+            printf("Bytes sent: %zd\n", num_bytes_sent);
+
+            still_to_write -= num_bytes_sent;
+            if (still_to_write != 0) {
+                request_cursor += num_bytes_sent;
+                continue;
+            }
+
+            break;
+        } else if (num_bytes_sent == 0) {
+            printf("No more to send\n");
+            break;
+        } else {
+            perror("error writing to socket. check errno\n");
+            break;
         }
     }
 
